@@ -2,7 +2,7 @@
 import { getProject, setProjectThreadId } from "@/app/actions/project";
 import useAssistant from "@/hooks/useAssistant";
 import Image from "next/image";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { Separator } from "../ui/separator";
 import TaskTabs from "./TaskTabs";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
@@ -10,6 +10,8 @@ import Chat from "./Chat";
 import { Task } from "@/../.../../../../define";
 import start from "@/../public/stars.svg";
 import { useRouter } from "next/navigation";
+import ReadyPlayerMeAvatar from "@/share/components/ReadyPlayerMeAvatar"; // Add this import at the top of the file
+import { connectWebSocket, disconnectWebSocket } from '../../services/websocket'; // Add this import at the top of the file
 
 type Props = {
   projectId: string;
@@ -17,6 +19,8 @@ type Props = {
   serverMessages: any[];
   tasks: Task[];
 };
+
+const avatarUrl = 'https://models.readyplayer.me/6702ac102075ee5f35a0a783.glb';
 
 const usedDataId = new Set<string>();
 function ClientAssistantProvider({
@@ -28,6 +32,9 @@ function ClientAssistantProvider({
   const assistantData = useAssistant({ projectId, projectThreadId });
   const { status, messages, setMessages, append, threadId } = assistantData;
   const router = useRouter();
+
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   useEffect(() => {
     if (!projectThreadId && threadId)
@@ -74,10 +81,77 @@ function ClientAssistantProvider({
     }
   }, [messages]);
 
+  useEffect(() => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+
+    let audioChunks: string[] = [];
+    let expectedChunks = 0;
+
+    connectWebSocket((message) => {
+      const { data, chunkIndex, totalChunks, isLast } = message;
+      console.log(`Received chunk ${chunkIndex + 1} of ${totalChunks}`);
+
+      audioChunks[chunkIndex] = data;
+      expectedChunks = totalChunks;
+
+      if (isLast) {
+        const completeAudioBase64 = audioChunks.join('');
+        console.log('All chunks received, audio length:', completeAudioBase64.length);
+
+        const audioData = base64ToArrayBuffer(completeAudioBase64);
+        audioContextRef.current!.decodeAudioData(audioData, (buffer) => {
+          if (audioSourceRef.current) {
+            audioSourceRef.current.stop();
+          }
+          audioSourceRef.current = audioContextRef.current!.createBufferSource();
+          audioSourceRef.current.buffer = buffer;
+          audioSourceRef.current.connect(audioContextRef.current!.destination);
+          
+          console.log('About to pronounce message:', new Date().toISOString());
+          
+          audioSourceRef.current.start();
+        }, (error) => {
+          console.error('Error decoding audio:', error);
+        });
+
+        // Reset for next message
+        audioChunks = [];
+        expectedChunks = 0;
+      }
+    });
+
+    return () => {
+      disconnectWebSocket();
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, []);
+
+  const initAudioContext = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    // Attempt to resume the context immediately
+    audioContextRef.current!.resume().catch(console.error);
+  };
+
+  // Call initAudioContext on a user interaction, e.g., button click
+  useEffect(() => {
+    const handleInteraction = () => {
+      initAudioContext();
+      document.removeEventListener('click', handleInteraction);
+    };
+    document.addEventListener('click', handleInteraction);
+    return () => document.removeEventListener('click', handleInteraction);
+  }, []);
+
   return (
     <>
       <div className="w-7/12 flex justify-center max-h-screen overflow-auto">
-        <div className="w-2/3 flex flex-col  gap-9 mt-40">
+        <div className="w-2/3 flex flex-col  gap-9 mt-32">
           <div>
             <div className="flex gap-4">
               <Image src={start} alt="stars" />
@@ -85,23 +159,53 @@ function ClientAssistantProvider({
                 Project name
               </p>
             </div>
-            <p className="text-base mt-5">Project description</p>
+            {/* <p className="text-base mt-5">Project description</p> */}
           </div>
-          <Separator className="bg-gray-300" />
+          <Separator className="bg-gray-200" />
           <TaskTabs tasks={tasks} assistantData={assistantData} />
         </div>
       </div>
       <div className="w-5/12 relative">
-        <div className="absolute left-1/2 transform -translate-x-1/2 top-6 ">
-          <Avatar className="rounded-full size-32 flex justify-center items-center">
-            <AvatarImage src="https://s3-alpha-sig.figma.com/img/f519/87bd/f29e3840b6571edddafad02003369c3c?Expires=1725840000&Key-Pair-Id=APKAQ4GOSFWCVNEHN3O4&Signature=KfLOvejhugXgfsU-FtAkQcI8KkXzq7l82C9SwzMaRA7cSY2V2mkg1-aSIxP1D0O9xPE0Aw7ijiWldqJiptST-KY6nICLFKZHWkdh0ovm0yXqPwBB1bApulhyarFDnYtN9Jkbq9pMNF562~6krVryvjIifWEbneCfMkaMM14hCuBYwljOrwkRW8qYH957ASOnr3DAGIxJnuagXVQnnlAyYJO5WglFchZYLNTRl9nTJxf6hjWDG9j4Ua8lO80N8YHqPAsVmz6pTJ4-TMgLUbqRFUGxhA8Bzt0v2uB6axFBUZooTzNoXjP40YSVI53ssXwhZtXQQjRt~Da1xE9e-ChrRQ__" />
-            <AvatarFallback className="text-black text-2xl">Dn</AvatarFallback>
-          </Avatar>
+        {/* Background div */}
+        <div className="absolute top-0 right-0 w-full h-full bg-F1F2F4">
+          {/* Gradient div as background for avatar */}
+          <div className="absolute top-0 left-0 w-full h-[60vh] bg-gradient-to-b from-gray-200 via-gray-200 to-transparent">
+            {/* Avatar container */}
+            <div className="absolute left-1/2 transform -translate-x-1/2 top-6">
+              <div className="w-64 h-64 rounded-full overflow-hidden bg-gray-100 shadow-glow">
+                <div className="w-full h-full">
+                  <ReadyPlayerMeAvatar 
+                    avatarUrl={avatarUrl} 
+                    width="100%" 
+                    height="100%" 
+                  />
+                </div>
+              </div>
+              {/* Mood tag */}
+              <div className="mt-4 text-center">
+                <span className="px-4 py-2 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+                💡 Good mood!
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
-        <Chat assistantData={assistantData} />
+        
+        {/* Chat component */}
+        <Chat assistantData={{...assistantData, status}} />
       </div>
     </>
   );
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binaryString = window.atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
 
 export default ClientAssistantProvider;
