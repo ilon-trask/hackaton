@@ -5,10 +5,14 @@ import { AssistantResponse } from "ai";
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { RunSubmitToolOutputsParams } from "openai/resources/beta/threads/runs/runs.mjs";
+import * as Ably from 'ably';
 
 const openai = new OpenAI({
   apiKey: ENV.OPENAI_API_KEY || "",
 });
+
+const ably = new Ably.Realtime({ key: process.env.NEXT_PUBLIC_ABLY_API_KEY });
+const channel = ably.channels.get('audio-channel');
 
 // Allow streaming responses up to 30 seconds
 export const maxDuration = 30;
@@ -62,23 +66,66 @@ export async function POST(req: Request, res: NextResponse) {
       });
 
       if (input.role == 'system') return;
+
       runStream.on('end', async () => {
-        console.log('before before before')
+        console.log('AI response generation completed');
         //@ts-ignore
         const aiMessage = (await runStream.finalMessages())[0].content[0].text.value;
-        const userDbMessage = await userDbMessagePromise
-        const dbMessage = await db.insert(message).values({
-          content: aiMessage,
-          projectId: input.projectId,
-          role: "assistant",
-        })
-      })
+        console.log('AI Message:', aiMessage);
+
+        try {
+          console.log('Attempting to generate speech');
+          const speechPromise = openai.audio.speech.create({
+            model: "tts-1",
+            voice: "alloy",
+            input: aiMessage,
+          });
+
+          // Start processing the text response immediately
+          const dbMessagePromise = db.insert(message).values({
+            content: aiMessage,
+            projectId: input.projectId,
+            role: "assistant",
+          });
+
+          // Wait for both the speech generation and database insertion to complete
+          const [speechResponse, dbMessage] = await Promise.all([speechPromise, dbMessagePromise]);
+
+          console.log('Speech generated successfully');
+
+          const audioBuffer = await speechResponse.arrayBuffer();
+          const audioBase64 = Buffer.from(audioBuffer).toString('base64');
+          console.log('Audio converted to base64, length:', audioBase64.length);
+
+          // Implement chunking
+          const chunkSize = 32000; // 32KB chunks (leaving some room for metadata)
+          const chunks = [];
+          for (let i = 0; i < audioBase64.length; i += chunkSize) {
+            chunks.push(audioBase64.slice(i, i + chunkSize));
+          }
+
+          console.log(`Splitting audio into ${chunks.length} chunks`);
+
+          // Publish chunks
+          for (let i = 0; i < chunks.length; i++) {
+            await channel.publish('audio_chunk', {
+              data: chunks[i],
+              chunkIndex: i,
+              totalChunks: chunks.length,
+              isLast: i === chunks.length - 1
+            });
+            console.log(`Published chunk ${i + 1} of ${chunks.length}`);
+          }
+
+          console.log('All audio chunks published to Ably channel');
+        } catch (error) {
+          console.error('Failed to generate or send speech:', error);
+        }
+      });
 
       // forward run status would stream message deltas
       let runResult = await forwardStream(runStream);
       console.log("before switch");
-
-
 
       // status can be: queued, in_progress, requires_action, cancelling, cancelled, failed, completed, or expired
       while (

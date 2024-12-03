@@ -20,6 +20,7 @@ async function page({ params }: Props) {
   if (!projectData) {
     redirect("/dashboard");
   }
+
   const tasksPromise = db.query.task.findMany({
     where: (tasks, { eq }) => eq(tasks.projectId, projectData.id),
   });
@@ -27,10 +28,12 @@ async function page({ params }: Props) {
     where: (messages, { eq }) => eq(messages.projectId, params.chatId),
     orderBy: message.createdAt,
   });
+
   const [tasks, serverMessages] = await Promise.all([
     tasksPromise,
     serverMessagesPromise,
   ]);
+
   return (
     <div className="relative flex max-h-screen">
       <AccountButton user={userData} />
@@ -41,6 +44,7 @@ async function page({ params }: Props) {
         }
         serverMessages={serverMessages}
         tasks={tasks}
+        userId={userData.id}
       />
     </div>
   );

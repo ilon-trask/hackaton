@@ -1,4 +1,3 @@
-
 import { nanoid } from "nanoid";
 import {
   text,
@@ -7,7 +6,8 @@ import {
   pgEnum,
   json,
 } from "drizzle-orm/pg-core";
-import { Task } from "./define";
+import { Task } from "./define.js";
+import { sql } from "drizzle-orm";
 
 
 export type User = typeof user.$inferSelect;
@@ -19,6 +19,7 @@ export const user = pgTable("users", {
   name: text("name").notNull(),
   email: text("email").notNull(),
   image: text("image"),
+  isOnboarding: text("is_onboarding").default('true').notNull(),
   createdAt: timestamp("created_at")
     .$default(() => new Date())
     .notNull(),
@@ -49,7 +50,7 @@ export const task = pgTable("tasks", {
   name: text("name").notNull(),
   description: text("description"),
   status: statusEnum("status").$type<"done" | "in progress">().notNull().default('in progress'),
-  deadline: timestamp("deadline").notNull(),
+  deadline: timestamp("deadline").default(sql`CURRENT_TIMESTAMP`),
   projectId: text("projectId")
     .notNull()
     .references(() => project.id), createdAt: timestamp("created_at")
